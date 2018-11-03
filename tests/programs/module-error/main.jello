@@ -1,0 +1,6 @@
+// A diagnostic in a module names its path in the fixture.
+// error: dep/Bad.jello:3:21: operator + is not defined for i32 and bytes
+// error: export let x: I32 = 1 + "one";
+// error:                     ^
+import { x } from dep.Bad;
+x

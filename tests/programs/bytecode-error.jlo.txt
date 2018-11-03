@@ -1,0 +1,3 @@
+# error: 2:42: parse error: expected 'types'
+.jlo module version=1 features=[] entry=0
+bogus

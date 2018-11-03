@@ -1,0 +1,5 @@
+// args: one "two words"
+// expect: [one][two words]
+let shown = ""; let rest = System.args;
+while (!List.is_nil(rest)) { shown += "[" + List.head(rest) + "]"; rest = List.tail(rest); }
+shown

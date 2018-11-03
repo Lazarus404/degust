@@ -1,0 +1,4 @@
+// expect: 1
+// flags: --path a
+// flags: --path b
+1

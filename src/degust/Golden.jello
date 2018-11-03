@@ -1,0 +1,55 @@
+package degust;
+
+/* Golden files where a test compares what it produced with a file
+ * that holds what it should produce, and `-- --update` rewrites the file
+ * instead, as Go's golden convention and insta do. A path is relative to the
+ * directory the tests run from, the package root by convention, and the
+ * golden file sits beside its test. */
+
+import type { Test } from std.testing;
+import std.testing as T;
+import { exists, makeDirs, readText, writeText } from std.io.File;
+import { split } from std.core.Bytes;
+import { dirname } from std.io.Path;
+
+T.declareFlag("--update", "rewrite golden files that differ or are missing (degust.Golden)");
+
+// Whether the tests run with -- --update.
+export let updating = fn(): Bool { T.flag("--update") };
+
+// TEXT's lines; a final newline ends the last line rather than starting one.
+let _lines = fn(text: Bytes): Array<Bytes> {
+  let lines = split(text, "\n");
+  if ((lines.len() > 1) && (lines[lines.len() - 1] == "")) { lines.pop(); }
+  lines
+};
+
+// Where GOT and WANT first differ, by line.
+let _difference = fn(got: Bytes, want: Bytes): Bytes {
+  let gotLines = _lines(got); let wantLines = _lines(want);
+  let i = 0;
+  while ((i < gotLines.len()) && (i < wantLines.len()) && (gotLines[i] == wantLines[i])) { i++; }
+  let line = "line " + Std.string(i + 1);
+  if (i >= gotLines.len()) { return line + ": got the end, want " + wantLines[i]; }
+  if (i >= wantLines.len()) { return line + ": got " + gotLines[i] + ", want the end"; }
+  line + ":\ngot:  " + gotLines[i] + "\nwant: " + wantLines[i]
+};
+
+// Whether GOT is the contents of the golden file PATH.
+export let matches = fn(path: Bytes, got: Bytes): Bool { exists(path) && (readText(path) == got) };
+
+/* Fails T unless GOT is the contents of the golden file PATH, saying where
+ * they first differ; whether they matched. Under --update it writes GOT to
+ * PATH instead, when they differ, making its directory if need be, and logs
+ * that it did. */
+export let equal = fn(t: Test, path: Bytes, got: Bytes): Bool {
+  let present = exists(path); let want = present ? readText(path) : "";
+  if (present && (want == got)) { return true; }
+  if (updating()) {
+    if (makeDirs(dirname(path)) && writeText(path, got)) { T.log(t, "updated " + path); return true; }
+    T.fail(t, "cannot write " + path);
+    return false;
+  }
+  T.fail(t, present ? path + " differs at " + _difference(got, want) + "\n(-- --update accepts the output)" : path + " does not exist (-- --update writes it)");
+  false
+};

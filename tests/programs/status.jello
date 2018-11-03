@@ -1,0 +1,10 @@
+// expect: one
+// expect: two
+// stderr: oops
+// status: 3
+import { writeText } from std.io.File;
+
+writeText("/dev/stdout", "one\ntwo\n");
+writeText("/dev/stderr", "oops\n");
+System.exit(3);
+null

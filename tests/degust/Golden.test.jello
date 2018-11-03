@@ -1,0 +1,46 @@
+package degust;
+
+import type { Test } from std.testing;
+import std.testing as T;
+import { makeDirs, readText, remove } from std.io.File;
+import { equal, matches, updating } from degust.Golden;
+
+// A test that records failures without failing the test that runs it.
+let _fake = fn(): Test { Test.Test("fake", [false, false, false], Array.new<Bytes>(0)) };
+let _messages = fn(t: Test): Array<Bytes> { match (t) { Test(_, _, output) => output } };
+
+let testMatches = fn(t: Test) {
+  T.isTrue(t, equal(t, "tests/golden/hello.golden", "hello\nworld\n"));
+};
+
+let testDiffers = fn(t: Test) {
+  let fake = _fake();
+  T.isTrue(t, !equal(fake, "tests/golden/hello.golden", "hello\nthere\n"));
+  T.equal(t, _messages(fake), ["tests/golden/hello.golden differs at line 2:\ngot:  there\nwant: world\n(-- --update accepts the output)"]);
+  let longer = _fake();
+  equal(longer, "tests/golden/hello.golden", "hello\nworld\nmore");
+  let shorter = _fake();
+  equal(shorter, "tests/golden/hello.golden", "hello");
+  T.equal(t, _messages(shorter), ["tests/golden/hello.golden differs at line 2: got the end, want world\n(-- --update accepts the output)"]);
+  T.equal(t, _messages(longer), ["tests/golden/hello.golden differs at line 3: got more, want the end\n(-- --update accepts the output)"]);
+};
+
+let testMatchesOnly = fn(t: Test) {
+  T.equal(t, (matches("tests/golden/hello.golden", "hello\nworld\n"), matches("tests/golden/hello.golden", "hello"), matches("tests/golden/missing.golden", "")), (true, false, false));
+};
+
+let testMissing = fn(t: Test) {
+  let fake = _fake();
+  T.isTrue(t, !equal(fake, "tests/golden/missing.golden", "anything"));
+  T.equal(t, _messages(fake), ["tests/golden/missing.golden does not exist (-- --update writes it)"]);
+};
+
+// Under -- --update a golden file that differs, or is missing, is written.
+let testUpdates = fn(t: Test) {
+  if (!updating()) { T.skip(t, "runs under -- --update"); }
+  let path = "build/golden/updated.golden";
+  makeDirs("build/golden"); remove(path);
+  T.isTrue(t, equal(t, path, "first"));
+  T.isTrue(t, equal(t, path, "second"));
+  T.equal(t, readText(path), "second");
+};

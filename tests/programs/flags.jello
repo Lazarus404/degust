@@ -1,0 +1,6 @@
+// expect: 6
+// flags: --path $DIR/auxiliary
+// The module is under a further root, which holds no fixtures.
+import { twice } from shared.Twice;
+
+twice(3)

@@ -1,0 +1,7 @@
+{
+  "name": "degust",
+  "version": "0.1.0",
+  "description": "Golden files and end-to-end program fixtures on std.testing",
+  "dependencies": {},
+  "package_paths": ["src"]
+}

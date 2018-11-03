@@ -1,0 +1,8 @@
+// The caret lines follow the diagnostic, tab and all.
+// error: 6:2: unknown local: missing
+// error: 	missing
+// error: 	^
+let f = fn(): I32 {
+	missing
+};
+f()

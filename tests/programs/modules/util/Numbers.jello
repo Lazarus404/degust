@@ -1,0 +1,2 @@
+package util;
+export let seven = fn(): I32 { 7 };

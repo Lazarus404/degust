@@ -1,0 +1,6 @@
+// error: 4:1: module shared.Nope not found: $DIR/shared/Nope.jello, $DIR/auxiliary/shared/Nope.jello
+// flags: --path $DIR/auxiliary
+// $DIR is the fixture's directory in a diagnostic too.
+import { nope } from shared.Nope;
+
+nope

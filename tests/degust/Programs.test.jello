@@ -1,0 +1,39 @@
+package degust;
+
+import type { Test } from std.testing;
+import std.testing as T;
+import { checkCommand, checkEnv, compiler, jloTool, modes, outDir, run, stdDir, vmCommand, vmEnv } from degust.Programs;
+
+// Every directive, as fixtures that pass: run with -- --compiler and --vm.
+let testPasses = fn(t: Test) { run(t, "tests/programs"); };
+
+// Each way a fixture fails.
+let testFails = fn(t: Test) { run(t, "tests/failing"); };
+
+// The environment of every step, natives from /v.
+const _STEP = ["JELLO_BC_SKIP_VALIDATE", "JELLO_JIT_DISABLE", "JELLO_JDLL_PATH=/v"];
+
+// Skips T unless run with -- --vm /v/jellovm, as scripts/test.sh runs it.
+let _given = fn(t: Test): Null {
+  if (T.option("--vm", "") != "/v/jellovm") { T.skip(t, "scripts/test.sh gives the options this checks"); };
+};
+
+/* The exports that read the options, as scripts/test.sh gives them: -- --vm
+ * /v/jellovm --compiler 'jc "a b"' --std /s --out /o --modes jit,eager
+ * --check 'chk -q'. */
+let testOptions = fn(t: Test) {
+  _given(t);
+  T.equal(t, (compiler(), stdDir(), outDir(), modes(), jloTool()), (["jc", "a b"], "/s", "/o", ["jit", "eager"], "/v/jlo_tool"));
+  T.equal(t, vmCommand("jit", ["m", "x"]), ["/v/jellovm", "m", "x"]);
+  T.equal(t, vmCommand("no-jit", ["m"]), ["/v/jellovm", "--no-jit", "m"]);
+  T.equal(t, vmCommand("eager", ["m"]), ["/v/jellovm", "--require-jit", "m"]);
+  T.equal(t, vmEnv(), ["JELLO_BC_SKIP_VALIDATE", "JELLO_JIT_DISABLE", "JELLO_JDLL_PATH=/v", "MallocScribble=1"]);
+  T.equal(t, (checkCommand("d", "m"), checkEnv()), (["chk", "-q", "d", "m"], _STEP));
+};
+
+// Their defaults, given only -- --vm /v/jellovm.
+let testDefaults = fn(t: Test) {
+  _given(t);
+  T.equal(t, (compiler(), stdDir(), outDir(), modes(), checkEnv()), (Array.new<Bytes>(0), "", "build/degust", ["jit", "no-jit"], _STEP));
+  T.throws(t, fn() { checkCommand("d", "m"); });
+};

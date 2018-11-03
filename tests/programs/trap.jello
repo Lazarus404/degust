@@ -1,0 +1,5 @@
+// trap: BOUNDS 4:1
+let buffer = Bytes.new(2);
+// The byte is out of range.
+Bytes.set_u8(buffer, 0, 256);
+buffer[0]

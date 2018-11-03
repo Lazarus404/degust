@@ -1,0 +1,6 @@
+// expect: true
+// Each run has a directory of its own in TMPDIR.
+import { listDir, writeText } from std.io.File;
+import { getEnv } from std.io.Env;
+let dir = getEnv("TMPDIR");
+writeText(dir + "/mine", "x") && (listDir(dir) == ["mine"])

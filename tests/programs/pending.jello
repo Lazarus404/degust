@@ -1,0 +1,4 @@
+// pending: unsupported
+// expect: 2
+// The feature is unsupported: this prints 1, not 2.
+1

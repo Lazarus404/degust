@@ -1,0 +1,77 @@
+=== RUN   degust/Programs/testFails
+=== RUN   degust/Programs/testFails/broken
+--- FAIL: degust/Programs/testFails/broken
+    the compile failed (status 1):
+        tests/failing/broken.jello:2:1: unknown local: missing
+        missing
+        ^
+=== RUN   degust/Programs/testFails/bytecode
+=== RUN   degust/Programs/testFails/bytecode/jit
+--- FAIL: degust/Programs/testFails/bytecode/jit
+    the trap: got status 1, jellovm: trap TYPE_MISMATCH in function 0 at pc 3, want jellovm: trap TYPE_MISMATCH in function 0 at pc 9
+--- FAIL: degust/Programs/testFails/bytecode
+=== RUN   degust/Programs/testFails/compiles
+--- FAIL: degust/Programs/testFails/compiles
+    the compiler's exit status: got 0, want 1
+    the diagnostic: got nothing, want tests/failing/compiles.jello:2:1: unknown local: x
+    the compiler wrote build/degust/compiles.jlo
+=== RUN   degust/Programs/testFails/finalizes-alone
+--- FAIL: degust/Programs/testFails/finalizes-alone
+    tests/failing/finalizes-alone.jello: finalizes takes a number, with gc: collects
+=== RUN   degust/Programs/testFails/flags-bytecode
+--- FAIL: degust/Programs/testFails/flags-bytecode
+    tests/failing/flags-bytecode.jlo.txt: flags are the compiler's, and jlo_tool assembles a .jlo.txt
+=== RUN   degust/Programs/testFails/gc-word
+--- FAIL: degust/Programs/testFails/gc-word
+    tests/failing/gc-word.jello: gc takes collects
+=== RUN   degust/Programs/testFails/gc
+=== RUN   degust/Programs/testFails/gc/jit
+--- FAIL: degust/Programs/testFails/gc/jit
+    the standard output: got 1000, want 999
+=== RUN   degust/Programs/testFails/gc/gc
+--- FAIL: degust/Programs/testFails/gc/gc
+    the gc run's result: got 1000, want 999
+--- FAIL: degust/Programs/testFails/gc
+=== RUN   degust/Programs/testFails/golden
+=== RUN   degust/Programs/testFails/golden/jit
+--- FAIL: degust/Programs/testFails/golden/jit
+    tests/failing/golden.stdout differs at line 1:
+        got:  got
+        want: want
+        (-- --update accepts the output)
+--- FAIL: degust/Programs/testFails/golden
+=== RUN   degust/Programs/testFails/handles
+=== RUN   degust/Programs/testFails/handles/jit
+=== RUN   degust/Programs/testFails/handles/gc
+--- FAIL: degust/Programs/testFails/handles/gc
+    the collector finalized 0 native handles, fewer than 1000
+--- FAIL: degust/Programs/testFails/handles
+=== RUN   degust/Programs/testFails/output
+=== RUN   degust/Programs/testFails/output/jit
+--- FAIL: degust/Programs/testFails/output/jit
+    the standard output: got 1, want 2
+--- FAIL: degust/Programs/testFails/output
+=== RUN   degust/Programs/testFails/passes
+--- FAIL: degust/Programs/testFails/passes
+    pending (unsupported) now passes; promote it
+=== RUN   degust/Programs/testFails/status
+=== RUN   degust/Programs/testFails/status/jit
+--- FAIL: degust/Programs/testFails/status/jit
+    the exit status: got 0, want 4
+    the standard error: got nothing, want no
+    the standard output: got 1, want nothing
+--- FAIL: degust/Programs/testFails/status
+=== RUN   degust/Programs/testFails/trap
+=== RUN   degust/Programs/testFails/trap/jit
+--- FAIL: degust/Programs/testFails/trap/jit
+    the trap: got status 0, want tests/failing/trap.jello:LINE:COLUMN: jellovm: trap BOUNDS in ...
+    the standard output: got 1, want nothing
+--- FAIL: degust/Programs/testFails/trap
+=== RUN   degust/Programs/testFails/twice
+--- FAIL: degust/Programs/testFails/twice
+    tests/failing/twice.jello: flags is given twice; it takes one line
+=== RUN   degust/Programs/testFails/unstated
+--- FAIL: degust/Programs/testFails/unstated
+    tests/failing/unstated.jello: no expectation: give expect, stderr, golden, status, trap or error
+--- FAIL: degust/Programs/testFails (tests/degust/Programs.test.jello:11)
+FAIL

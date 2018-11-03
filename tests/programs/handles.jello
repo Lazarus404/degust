@@ -1,0 +1,12 @@
+// gc: collects
+// finalizes: 1000
+// expect: 2000
+// Every match is a native handle the collector frees.
+import { group } from std.core.RegExp;
+
+let i = 0; let hits = 0;
+while (i < 2000) {
+  hits += match ("a" + Std.string(i % 10)) { when ~r/[a-z]([0-9])/ as m => Bytes.len(group(m, 1)), _ => 0 };
+  i++;
+}
+hits

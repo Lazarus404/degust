@@ -1,0 +1,573 @@
+package degust;
+
+/* End-to-end program fixtures, in the style of compiletest, lit and testscript.
+ * `run(t, dir)` compiles every fixture under DIR, checks it, runs it in each
+ * mode, and makes one subtest per fixture and one per mode under it.
+ *
+ * Every step is a process, `--jobs` at a time, so a trap or a crash fails
+ * only its own case; whichever ends first is reaped first, and a fixture's
+ * runs start as soon as it compiles. A fixture is a `.jello` file, a
+ * directory holding `main.jello`, whose other files are its modules, or a
+ * hand-written `.jlo.txt` module, which `jlo_tool asm` assembles; its name is
+ * its path under DIR, less `.jello` or `.jlo.txt`. A directory named
+ * `auxiliary` holds no fixtures: it is for the files fixtures share, such as
+ * the modules under a `--path` root.
+ *
+ * A fixture states what it expects in `// key: value` lines at its top (`#
+ * key: value` in a `.jlo.txt`); other comment lines there are prose:
+ *
+ *   // expect: 42            its standard output, one line per directive,
+ *                            trailing newlines aside (otherwise empty)
+ *   // stderr: oops          its standard error, likewise
+ *   // golden: NAME          its standard output is the golden file NAME,
+ *                            beside the fixture (degust.Golden; --update)
+ *   // status: 3             its exit status (otherwise 0)
+ *   // trap: BOUNDS 2:1      it traps so, and exits 1, every mode alike; the
+ *                            place, optional, is a line and column of the
+ *                            fixture, or `function 0 at pc 3` in a `.jlo.txt`
+ *   // error: 3:5: unknown local: x
+ *                            it does not compile (or assemble): the compiler
+ *                            exits 1, writes nothing, and its standard error
+ *                            starts with this diagnostic, at a line and
+ *                            column of the fixture, or at a path under a
+ *                            directory fixture (`// error: dep/Bad.jello:3:1:
+ *                            ...`); one line per directive, so a caret can
+ *                            follow
+ *   // args: one "two words" its arguments
+ *   // flags: --path $DIR/lib
+ *                            the compiler's further flags, after the source
+ *   // modes: no-jit         only these of the modes run
+ *   // gc: collects          a further run must collect garbage, and
+ *                            return the expected output
+ *   // finalizes: 100        with gc, the collector must also free at
+ *                            least 100 native handles
+ *   // pending: REASON       a feature not yet supported: the fixture must
+ *                            still fail somewhere, and is reported as skipped;
+ *                            once it passes, it fails, to be promoted
+ *
+ * Only expect, stderr and error repeat; any other directive given twice is
+ * malformed. In every value, $DIR is the fixture's directory, as the runner
+ * names it.
+ *
+ * The options, after the test binary's --, say what runs the fixtures (the
+ * usage lists them):
+ *
+ *   --compiler CMD   the compiler, as words (required); a fixture compiles
+ *                    with `CMD SOURCE FLAGS [--std DIR] [--jlo] --out MODULE`
+ *   --vm PATH        the VM (required), run as `PATH [FLAG] MODULE ARGS...`
+ *   --jdll DIR       JELLO_JDLL_PATH for every step (the VM's directory)
+ *   --jlo-tool PATH  for `.jlo.txt` fixtures and gc runs (beside the VM)
+ *   --std DIR        the standard library (otherwise the compiler's own
+ *                    default, JELLO_STD_PATH)
+ *   --check CMD      run after each compile of a `.jello` fixture as
+ *                    `CMD DUMP MODULE`, where DUMP holds the JLO listing the
+ *                    compiler printed (--jlo); it must exit 0
+ *   --modes LIST     of jit, no-jit and eager, comma-separated (jit,no-jit)
+ *   --jobs N         processes at once (the processors online)
+ *   --out DIR        where modules go (build/degust)
+ *
+ * Every step runs with JELLO_BC_SKIP_VALIDATE and JELLO_JIT_DISABLE unset, so
+ * the VM validates what it loads, and every VM run with MallocScribble=1, so
+ * memory the VM never initialized reads as junk on macOS, and with TMPDIR a
+ * directory of its own under --out, kept from one invocation to the next,
+ * since a fixture's modes run at once. */
+
+import type { Test } from std.testing;
+import std.testing as T;
+import degust.Golden as G;
+import { exists, listDir, makeDirs, readText, remove, writeText } from std.io.File;
+import { start, result, waitAny, cpuCount } from std.io.Process;
+import { endsWith, indexOf, join, split, startsWith } from std.core.Bytes;
+import { dirname } from std.io.Path;
+
+T.declareOption("--compiler", "the compiler, as words (required for degust.Programs)");
+T.declareOption("--vm", "the VM that runs the fixtures (required for degust.Programs)");
+T.declareOption("--jdll", "JELLO_JDLL_PATH for every step (the VM's directory)");
+T.declareOption("--jlo-tool", "jlo_tool, for .jlo.txt fixtures and gc runs (beside the VM)");
+T.declareOption("--std", "the standard library the fixtures compile against (the compiler's default)");
+T.declareOption("--check", "a command run as CMD DUMP MODULE after each compile, which must exit 0");
+T.declareOption("--modes", "the modes fixtures run in: jit, no-jit, eager, comma-separated (jit,no-jit)");
+T.declareOption("--jobs", "processes at once (the processors online)");
+T.declareOption("--out", "where modules go (build/degust)");
+
+// The options, read from the command line on each run.
+let _compiler = Array.new<Bytes>(0);
+let _vm = "";
+let _jdll = "";
+let _jloTool = "";
+let _std = "";
+let _check = Array.new<Bytes>(0);
+let _modes = Array.new<Bytes>(0);
+let _jobs = 0;
+let _out = "";
+
+const _MODES = ["jit", "no-jit", "eager"];
+const _KEYS = ["expect", "stderr", "golden", "status", "trap", "error", "args", "flags", "modes", "gc", "finalizes", "pending"];
+// The directives that take a line each; the others are given once.
+const _REPEATED = ["expect", "stderr", "error"];
+
+let _contains = fn(items: Array<Bytes>, item: Bytes): Bool {
+  let i = 0;
+  while (i < items.len()) { if (items[i] == item) { return true; } i++; }
+  false
+};
+
+// TEXT from byte START on, and TEXT less its last N bytes.
+let _from = fn(text: Bytes, start: I32): Bytes { Bytes.slice(text, start, Bytes.len(text) - start) };
+let _dropEnd = fn(text: Bytes, n: I32): Bytes { Bytes.slice(text, 0, Bytes.len(text) - n) };
+
+// TEXT less its trailing newlines, as a shell's $(...) gives output.
+let _chomp = fn(text: Bytes): Bytes {
+  let n = Bytes.len(text);
+  while ((n > 0) && (Bytes.get_u8(text, n - 1) == 10)) { n--; }
+  Bytes.slice(text, 0, n)
+};
+
+// The decimal I32 TEXT, or -1.
+let _number = fn(text: Bytes): I32 {
+  let value = 0; let i = 0;
+  while (i < Bytes.len(text)) {
+    let digit = Bytes.get_u8(text, i) - 48;
+    if ((digit < 0) || (digit > 9) || (value > 100000000)) { return -1; }
+    value = value * 10 + digit;
+    i++;
+  }
+  Bytes.len(text) == 0 ? -1 : value
+};
+
+// TEXT's words, split at spaces; double quotes keep spaces in a word.
+let _words = fn(text: Bytes): Array<Bytes> {
+  let words = Array.new<Bytes>(0); let word = ""; let quoted = false; let started = false; let i = 0;
+  while (i < Bytes.len(text)) {
+    let c = Bytes.get_u8(text, i);
+    if (c == 34) { quoted = !quoted; started = true; }
+    else if ((c == 32) && !quoted) { if (started) { words.push(word); } word = ""; started = false; }
+    else { word = word + Bytes.slice(text, i, 1); started = true; }
+    i++;
+  }
+  if (started) { words.push(word); }
+  words
+};
+
+let _concat = fn(a: Array<Bytes>, b: Array<Bytes>): Array<Bytes> {
+  let out = Array.new<Bytes>(0); let i = 0;
+  while (i < a.len()) { out.push(a[i]); i++; }
+  i = 0;
+  while (i < b.len()) { out.push(b[i]); i++; }
+  out
+};
+
+let _vmOption = fn(): Bytes { T.option("--vm", "") };
+let _jdllOption = fn(): Bytes { T.option("--jdll", dirname(_vmOption())) };
+let _checkOption = fn(): Array<Bytes> { _words(T.option("--check", "")) };
+
+// VM, in MODE, running ARGS, which start with the module.
+let _command = fn(vm: Bytes, mode: Bytes, args: Array<Bytes>): Array<Bytes> {
+  let flags = match (mode) { "no-jit" => ["--no-jit"], "eager" => ["--require-jit"], _ => Array.new<Bytes>(0) };
+  _concat(_concat([vm], flags), args)
+};
+
+/* The environment of every step, natives from JDLL: the VM validates what
+ * it loads and may JIT; a VM run also gets MallocScribble (macOS), which
+ * fills new allocations with junk, so reading memory the VM never
+ * initialized fails instead of passing by luck. */
+let _stepEnv = fn(jdll: Bytes): Array<Bytes> { ["JELLO_BC_SKIP_VALIDATE", "JELLO_JIT_DISABLE", "JELLO_JDLL_PATH=" + jdll] };
+let _vmEnv = fn(jdll: Bytes): Array<Bytes> { _concat(_stepEnv(jdll), ["MallocScribble=1"]) };
+
+/* What runs the fixtures, for tests beside them that run the compiler or
+ * the VM themselves: the compiler, as words, the standard library (or ""),
+ * where modules go, the modes and jlo_tool; how the VM runs a module in a
+ * mode, and with what environment, which jlo_tool's runs take too; and the
+ * check after each compile, of the compiler's --jlo dump and the module, and
+ * its environment. */
+export let compiler = fn(): Array<Bytes> { _words(T.option("--compiler", "")) };
+export let stdDir = fn(): Bytes { T.option("--std", "") };
+export let outDir = fn(): Bytes { T.option("--out", "build/degust") };
+export let modes = fn(): Array<Bytes> { split(T.option("--modes", "jit,no-jit"), ",") };
+export let jloTool = fn(): Bytes { T.option("--jlo-tool", dirname(_vmOption()) + "/jlo_tool") };
+export let vmCommand = fn(mode: Bytes, args: Array<Bytes>): Array<Bytes> {
+  if (_vmOption() == "") { throw "degust.Programs needs -- --vm PATH"; }
+  _command(_vmOption(), mode, args)
+};
+export let vmEnv = fn(): Array<Bytes> { _vmEnv(_jdllOption()) };
+export let checkCommand = fn(dump: Bytes, module: Bytes): Array<Bytes> {
+  let check = _checkOption();
+  if (check.len() == 0) { throw "degust.Programs needs -- --check CMD"; }
+  _concat(check, [dump, module])
+};
+export let checkEnv = fn(): Array<Bytes> { _stepEnv(_jdllOption()) };
+
+// Reads the options; a missing or bad one throws.
+let _options = fn(): Null {
+  _compiler = compiler();
+  _vm = _vmOption();
+  if ((_compiler.len() == 0) || (_vm == "")) { throw "degust.Programs needs -- --compiler CMD --vm PATH"; }
+  _jdll = _jdllOption();
+  _jloTool = jloTool();
+  _std = stdDir();
+  _check = _checkOption();
+  _modes = modes();
+  _jobs = _number(T.option("--jobs", Std.string(cpuCount())));
+  _out = outDir();
+  if (_jobs < 1) { throw "--jobs takes a positive number"; }
+  let i = 0;
+  while (i < _modes.len()) { if (!_contains(_MODES, _modes[i])) { throw "unknown mode " + _modes[i] + "; --modes takes jit, no-jit and eager"; } i++; }
+};
+
+// Whether SOURCE is a hand-written module, which jlo_tool assembles.
+let _isBytecode = fn(source: Bytes): Bool { endsWith(source, ".jlo.txt") };
+
+// The fixtures under DIR/REL, as (name, source), in name order.
+let _discover = fn(dir: Bytes, rel: Bytes, into: Array<Tuple<Bytes, Bytes>>): Null {
+  let path = rel == "" ? dir : dir + "/" + rel;
+  let entries = listDir(path);
+  if ((rel != "") && _contains(entries, "main.jello")) { into.push((rel, path + "/main.jello")); return; }
+  let i = 0;
+  while (i < entries.len()) {
+    let entry = entries[i]; let child = rel == "" ? entry : rel + "/" + entry;
+    if (endsWith(entry, "/")) { if (entry != "auxiliary/") { _discover(dir, _dropEnd(child, 1), into); } }
+    else if (endsWith(entry, ".jello")) { into.push((_dropEnd(child, 6), dir + "/" + child)); }
+    else if (_isBytecode(entry)) { into.push((_dropEnd(child, 8), dir + "/" + child)); }
+    i++;
+  }
+};
+
+/* The directives at the top of SOURCE, as (key, value): its leading comment
+ * lines, `//` or, in a `.jlo.txt`, `#`, that name a directive; $DIR in a
+ * value is SOURCE's directory. */
+let _directives = fn(source: Bytes): Array<Tuple<Bytes, Bytes>> {
+  let marker = _isBytecode(source) ? "# " : "// "; let width = Bytes.len(marker); let dir = dirname(source);
+  let lines = split(readText(source), "\n"); let found = Array.new<Tuple<Bytes, Bytes>>(0); let i = 0;
+  while ((i < lines.len()) && startsWith(lines[i], Bytes.slice(marker, 0, width - 1))) {
+    let line = lines[i]; let colon = indexOf(line, ":");
+    if (startsWith(line, marker) && (colon > width) && _contains(_KEYS, Bytes.slice(line, width, colon - width))) {
+      let value = _from(line, colon + 1);
+      found.push((Bytes.slice(line, width, colon - width), join(split(startsWith(value, " ") ? _from(value, 1) : value, "$DIR"), dir)));
+    }
+    i++;
+  }
+  found
+};
+
+// The values of DIRECTIVES' KEY, in order.
+let _values = fn(directives: Array<Tuple<Bytes, Bytes>>, key: Bytes): Array<Bytes> {
+  let values = Array.new<Bytes>(0); let i = 0;
+  while (i < directives.len()) { let (k, v) = directives[i]; if (k == key) { values.push(v); } i++; }
+  values
+};
+
+// The first value of DIRECTIVES' KEY, or FALLBACK.
+let _value = fn(directives: Array<Tuple<Bytes, Bytes>>, key: Bytes, fallback: Bytes): Bytes {
+  let values = _values(directives, key);
+  values.len() == 0 ? fallback : values[0]
+};
+
+// The lines of DIRECTIVES' KEY, joined.
+let _lines = fn(directives: Array<Tuple<Bytes, Bytes>>, key: Bytes): Bytes { join(_values(directives, key), "\n") };
+
+/* What is wrong with DIRECTIVES themselves, or "", for a hand-written module
+ * when BYTECODE. */
+let _malformed = fn(directives: Array<Tuple<Bytes, Bytes>>, bytecode: Bool): Bytes {
+  let has = fn(key: Bytes): Bool { _values(directives, key).len() > 0 };
+  let i = 0;
+  while (i < _KEYS.len()) {
+    let key = _KEYS[i];
+    if (!_contains(_REPEATED, key) && (_values(directives, key).len() > 1)) { return key + " is given twice; it takes one line"; }
+    i++;
+  }
+  if (!has("expect") && !has("stderr") && !has("golden") && !has("status") && !has("trap") && !has("error")) {
+    return "no expectation: give expect, stderr, golden, status, trap or error";
+  }
+  if (has("error") && (has("expect") || has("stderr") || has("golden") || has("status") || has("trap") || has("args") || has("gc"))) {
+    return "error says the fixture does not compile, so it cannot also say how it runs";
+  }
+  if (has("trap") && (has("status") || has("stderr"))) { return "trap gives the exit status and the standard error"; }
+  if (has("expect") && has("golden")) { return "expect and golden both give the standard output"; }
+  if (has("status") && (_number(_value(directives, "status", "")) < 0)) { return "status takes a number"; }
+  if (has("gc") && (_value(directives, "gc", "") != "collects")) { return "gc takes collects"; }
+  if (has("finalizes") && (!has("gc") || (_number(_value(directives, "finalizes", "")) < 0))) { return "finalizes takes a number, with gc: collects"; }
+  if (has("flags") && bytecode) { return "flags are the compiler's, and jlo_tool assembles a .jlo.txt"; }
+  ""
+};
+
+
+/* The environment of a step; a VM run, given TMP, its own directory, also
+ * gets TMPDIR. */
+let _env = fn(tmp: Bytes): Array<Bytes> {
+  if (tmp == "") { return _stepEnv(_jdll); }
+  _concat(_vmEnv(_jdll), ["TMPDIR=" + tmp])
+};
+
+/* Runs the commands in QUEUE, (argv, env), _jobs at a time, whichever ends
+ * first reaped first, so a slow one holds up no other. DONE gets each one's
+ * index and result as it ends, and may add commands to QUEUE, which run in
+ * turn. */
+let _runQueue = fn(
+  queue: Array<Tuple<Array<Bytes>, Array<Bytes>>>,
+  done: (I32, Tuple<I32, Bytes, Bytes>) -> Null
+): Null {
+  let running = Array.new<Dynamic>(0); let indexes = Array.new<I32>(0); let next = 0;
+  while ((next < queue.len()) || (running.len() > 0)) {
+    while ((next < queue.len()) && (running.len() < _jobs)) {
+      let (argv, env) = queue[next];
+      running.push(start(argv, env)); indexes.push(next);
+      next++;
+    }
+    let i = waitAny(running); let last = running.len() - 1;
+    let index = indexes[i]; let finished = result(running[i]);
+    running[i] = running[last]; running.pop();
+    indexes[i] = indexes[last]; indexes.pop();
+    done(index, finished);
+  }
+};
+
+/* "got X, want Y" for WHAT, on lines of their own when either spans lines;
+ * empty text shows as "nothing". */
+let _mismatch = fn(what: Bytes, got: Bytes, want: Bytes): Bytes {
+  let shownGot = got == "" ? "nothing" : got; let shownWant = want == "" ? "nothing" : want;
+  let multiline = (indexOf(got, "\n") >= 0) || (indexOf(want, "\n") >= 0);
+  multiline ? what + ":\ngot:\n" + shownGot + "\nwant:\n" + shownWant : what + ": got " + shownGot + ", want " + shownWant
+};
+
+// What is wrong with a compile of SOURCE, expecting DIRECTIVES, to MODULE.
+let _compileProblems = fn(
+  directives: Array<Tuple<Bytes, Bytes>>,
+  source: Bytes,
+  module: Bytes,
+  result: Tuple<I32, Bytes, Bytes>
+): Array<Bytes> {
+  let (status, out, err) = result; let problems = Array.new<Bytes>(0);
+  let error = _lines(directives, "error");
+  if (error == "") {
+    if ((status != 0) || (err != "")) { problems.push("the compile failed (status " + Std.string(status) + "):\n" + _chomp(err)); }
+  } else {
+    // A place in the fixture starts with its line; one in another module, with its path.
+    let dir = dirname(source); let first = Bytes.get_u8(error, 0);
+    let want = dir + "/" + ((first >= 48) && (first <= 57) ? _from(source, Bytes.len(dir) + 1) + ":" : "") + error;
+    if (status != 1) { problems.push(_mismatch("the compiler's exit status", Std.string(status), "1")); }
+    if (_chomp(out) != "") { problems.push(_mismatch("the compiler's standard output", _chomp(out), "")); }
+    if (!startsWith(err, want)) { problems.push(_mismatch("the diagnostic", _chomp(err), want)); }
+    if (exists(module)) { problems.push("the compiler wrote " + module); }
+  }
+  problems
+};
+
+/* What is wrong with a run of SOURCE, expecting DIRECTIVES, given FIRST, the
+ * first mode's standard error ("" for the first mode); golden files aside. */
+let _runProblems = fn(
+  directives: Array<Tuple<Bytes, Bytes>>,
+  source: Bytes,
+  result: Tuple<I32, Bytes, Bytes>,
+  first: Bytes
+): Array<Bytes> {
+  let (status, out, err) = result; let problems = Array.new<Bytes>(0);
+  let trap = _value(directives, "trap", "");
+  if (trap == "") {
+    let want = _number(_value(directives, "status", "0"));
+    if (status != want) { problems.push(_mismatch("the exit status", Std.string(status), Std.string(want)) + (err == "" ? "" : "\n" + _chomp(err))); }
+    if (_chomp(err) != _lines(directives, "stderr")) { problems.push(_mismatch("the standard error", _chomp(err), _lines(directives, "stderr"))); }
+  } else {
+    let space = indexOf(trap, " ");
+    let kind = space < 0 ? trap : Bytes.slice(trap, 0, space);
+    let at = space < 0 ? "" : _from(trap, space + 1);
+    let message = "jellovm: trap " + kind + " in ";
+    /* A program the compiler built names its source and place; a hand-written
+     * module, which has no line table, names the function and pc. */
+    let bytecode = _isBytecode(source);
+    let located = bytecode ? startsWith(err, message + at)
+      : at == "" ? startsWith(err, source + ":") && (indexOf(err, ": " + message) >= 0)
+      : startsWith(err, source + ":" + at + ": " + message);
+    let wanted = bytecode ? message + (at == "" ? "..." : at) : source + ":" + (at == "" ? "LINE:COLUMN" : at) + ": " + message + "...";
+    if ((status != 1) || !located) { problems.push(_mismatch("the trap", "status " + Std.string(status) + (err == "" ? "" : ", " + _chomp(err)), wanted)); }
+    if ((first != "") && (err != first)) { problems.push(_mismatch("the trap, against the first mode's", _chomp(err), _chomp(first))); }
+  }
+  if ((_values(directives, "golden").len() == 0) && (_chomp(out) != _lines(directives, "expect"))) {
+    problems.push(_mismatch("the standard output", _chomp(out), _lines(directives, "expect")));
+  }
+  problems
+};
+
+// The line of TEXT after its first PREFIX, or "" when it has none.
+let _after = fn(text: Bytes, prefix: Bytes): Bytes {
+  let at = indexOf(text, prefix); let rest = at < 0 ? "" : _from(text, at + Bytes.len(prefix));
+  let end = indexOf(rest, "\n");
+  end < 0 ? rest : Bytes.slice(rest, 0, end)
+};
+
+/* What is wrong with a gc run: it must collect at least once, finalize at
+ * least FINALIZES native handles, and return EXPECTED, the expected output,
+ * when there is one. */
+let _gcProblems = fn(result: Tuple<I32, Bytes, Bytes>, finalizes: I32, expected: Bytes): Array<Bytes> {
+  let (status, out, err) = result; let stats = out + err;
+  if ((status != 0) || (_number(_after(stats, "GC_COLLECTIONS ")) < 1)) {
+    return ["no garbage collection ran: status " + Std.string(status) + " " + _chomp(stats)];
+  }
+  let problems = Array.new<Bytes>(0);
+  let finalized = _number(_after(stats, "GC_FINALIZED_HANDLES "));
+  if (finalized < finalizes) {
+    problems.push("the collector finalized " + Std.string(finalized) + " native handles, fewer than " + Std.string(finalizes));
+  }
+  let returned = _after(stats, " value=");
+  if ((expected != "") && (returned != expected)) { problems.push(_mismatch("the gc run's result", returned, expected)); }
+  problems
+};
+
+/* What a PART step of SOURCE, expecting DIRECTIVES, did wrong, given FIRST,
+ * the first mode's standard error. */
+let _partProblems = fn(
+  directives: Array<Tuple<Bytes, Bytes>>,
+  source: Bytes,
+  part: Bytes,
+  result: Tuple<I32, Bytes, Bytes>,
+  first: Bytes
+): Array<Bytes> {
+  let (status, out, err) = result;
+  match (part) {
+    "check" => {
+      let said = _chomp(out + err);
+      status == 0 ? Array.new<Bytes>(0) : ["the check failed: status " + Std.string(status) + (said == "" ? "" : "\n" + said)]
+    },
+    "gc" => _gcProblems(result, _number(_value(directives, "finalizes", "0")), _lines(directives, "expect")),
+    _ => _runProblems(directives, source, result, first),
+  }
+};
+
+/* Reports a fixture from SOURCE, expecting DIRECTIVES (MALFORMED says what
+ * is wrong with them), compiled to MODULE with COMPILED, on SUB: its
+ * compile, then each of its PARTS as a subtest, with its RESULTS. A pending
+ * fixture is skipped while something fails, and fails once nothing does. */
+let _report = fn(
+  sub: Test,
+  source: Bytes,
+  directives: Array<Tuple<Bytes, Bytes>>,
+  malformed: Bytes,
+  module: Bytes,
+  compiled: Tuple<I32, Bytes, Bytes>,
+  parts: Array<Bytes>,
+  results: Array<Tuple<I32, Bytes, Bytes>>
+): Null {
+  if (malformed != "") { T.fail(sub, source + ": " + malformed); return; }
+  let golden = _value(directives, "golden", "");
+  let goldenPath = dirname(source) + "/" + golden;
+  let problems = _compileProblems(directives, source, module, compiled);
+  /* Each part's problems, and the first one of all; a trap matches the
+   * first mode's. */
+  let found = Array.new<Array<Bytes>>(0);
+  let failure = problems.len() > 0 ? problems[0] : ""; let first = ""; let s = 0;
+  while (s < parts.len()) {
+    let part = parts[s]; let (_, out, err) = results[s]; let mode = _contains(_MODES, part);
+    let wrong = _partProblems(directives, source, part, results[s], first);
+    if (mode && (first == "")) { first = err; }
+    if ((failure == "") && (wrong.len() > 0)) { failure = part + ": " + wrong[0]; }
+    if ((failure == "") && mode && (golden != "") && !G.matches(goldenPath, out)) { failure = part + ": the standard output differs from " + goldenPath; }
+    found.push(wrong);
+    s++;
+  }
+  let pending = _value(directives, "pending", "");
+  if (pending != "") {
+    if (failure == "") { T.fail(sub, "pending (" + pending + ") now passes; promote it"); }
+    else { T.skip(sub, "pending (" + pending + "): " + failure); }
+    return;
+  }
+  let p = 0;
+  while (p < problems.len()) { T.fail(sub, problems[p]); p++; }
+  s = 0;
+  while (s < parts.len()) {
+    let wrong = found[s]; let (_, out, _) = results[s];
+    let checksGolden = (golden != "") && _contains(_MODES, parts[s]);
+    T.run(sub, parts[s], fn(m: Test) {
+      let q = 0;
+      while (q < wrong.len()) { T.fail(m, wrong[q]); q++; }
+      if (checksGolden) { G.equal(m, goldenPath, out); };
+    });
+    s++;
+  };
+};
+
+/* Compiles, checks and runs the fixtures under DIR, one subtest each, with
+ * one subtest per mode under it; see the top of this file. */
+export let run = fn(t: Test, dir: Bytes): Null {
+  _options();
+  if (!exists(dir)) { T.fail(t, "no fixture directory " + dir); return; }
+  let found = Array.new<Tuple<Bytes, Bytes>>(0);
+  _discover(dir, "", found);
+  /* The commands, each with its result, the fixture it is for and its part
+   * ("compile", "check", "gc" or a mode); a fixture's checks and runs are
+   * queued as soon as it compiles. */
+  let queue = Array.new<Tuple<Array<Bytes>, Array<Bytes>>>(0);
+  let results = Array.new<Tuple<I32, Bytes, Bytes>>(0);
+  let ownerOf = Array.new<I32>(0); let partOf = Array.new<Bytes>(0);
+  let enqueue = fn(owner: I32, part: Bytes, argv: Array<Bytes>, tmp: Bytes): I32 {
+    queue.push((argv, _env(tmp))); results.push((0, "", "")); ownerOf.push(owner); partOf.push(part);
+    queue.len() - 1
+  };
+  /* The selected fixtures: name, source, directives, what is wrong with
+   * them, and where the module goes; with each one's compile (-1 for a
+   * malformed one, which is not compiled) and its other commands. */
+  let fixtures = Array.new<Tuple<Bytes, Bytes, Array<Tuple<Bytes, Bytes>>, Bytes, Bytes>>(0);
+  let compileOf = Array.new<I32>(0); let stepsOf = Array.new<Array<I32>>(0);
+  let i = 0;
+  while (i < found.len()) {
+    let (name, source) = found[i];
+    if (T.selected(t, name)) {
+      let directives = _directives(source); let module = _out + "/" + name + ".jlo";
+      let malformed = _malformed(directives, _isBytecode(source));
+      if (malformed == "") {
+        makeDirs(dirname(module));
+        remove(module);
+        let argv = [_jloTool, "asm", source, "-o", module];
+        if (!_isBytecode(source)) {
+          argv = _concat(_concat(_compiler, [source]), _words(_value(directives, "flags", "")));
+          if (_std != "") { argv.push("--std"); argv.push(_std); }
+          if ((_check.len() > 0) && (_value(directives, "error", "") == "")) { argv.push("--jlo"); }
+          argv.push("--out"); argv.push(module);
+        }
+        compileOf.push(enqueue(fixtures.len(), "compile", argv, ""));
+      } else { compileOf.push(-1); }
+      fixtures.push((name, source, directives, malformed, module));
+      stepsOf.push(Array.new<I32>(0));
+    }
+    i++;
+  }
+  let compiled = fn(fixture: I32, finished: Tuple<I32, Bytes, Bytes>): Null {
+    let (name, source, directives, _, module) = fixtures[fixture];
+    let (status, out, _) = finished;
+    // A VM run (RUNS) gets a directory of its own, as its modes run at once.
+    let add = fn(part: Bytes, argv: Array<Bytes>, runs: Bool): Null {
+      if (T.selected(t, name + "/" + part)) {
+        let tmp = runs ? _out + "/" + name + "." + part + ".tmp" : "";
+        if (runs) { makeDirs(tmp); }
+        stepsOf[fixture].push(enqueue(fixture, part, argv, tmp));
+      };
+    };
+    if ((status == 0) && (_value(directives, "error", "") == "")) {
+      if ((_check.len() > 0) && !_isBytecode(source)) {
+        let dump = _out + "/" + name + ".ir";
+        writeText(dump, out);
+        add("check", checkCommand(dump, module), false);
+      }
+      let fixtureModes = _words(_value(directives, "modes", "jit no-jit eager"));
+      let args = _words(_value(directives, "args", ""));
+      let m = 0;
+      while (m < _modes.len()) {
+        if (_contains(fixtureModes, _modes[m])) { add(_modes[m], _command(_vm, _modes[m], _concat([module], args)), true); }
+        m++;
+      }
+      if (_values(directives, "gc").len() > 0) { add("gc", [_jloTool, "run", module, "--gc-stats"], true); }
+    };
+  };
+  _runQueue(queue, fn(index: I32, finished: Tuple<I32, Bytes, Bytes>): Null {
+    results[index] = finished;
+    if (partOf[index] == "compile") { compiled(ownerOf[index], finished); };
+  });
+  i = 0;
+  while (i < fixtures.len()) {
+    let (name, source, directives, malformed, module) = fixtures[i];
+    let steps = stepsOf[i]; let parts = Array.new<Bytes>(0); let ran = Array.new<Tuple<I32, Bytes, Bytes>>(0);
+    let k = 0;
+    while (k < steps.len()) { parts.push(partOf[steps[k]]); ran.push(results[steps[k]]); k++; }
+    let compile = compileOf[i] < 0 ? (0, "", "") : results[compileOf[i]];
+    T.run(t, name, fn(sub: Test) { _report(sub, source, directives, malformed, module, compile, parts, ran); });
+    i++;
+  };
+};
