@@ -1,0 +1,4 @@
+// expect: 2
+// warning: 3:5: this clause cannot fail: use `let`
+let f = fn(v: I32): I32 { with x <- v { x + 1 } };
+f(1)

@@ -2,7 +2,7 @@
 === RUN   degust/Programs/testFails/broken
 --- FAIL: degust/Programs/testFails/broken
     the compile failed (status 1):
-        tests/failing/broken.jello:2:1: unknown local: missing
+        tests/failing/broken.jello:2:1: unknown name: missing
         missing
         ^
 === RUN   degust/Programs/testFails/bytecode
@@ -73,5 +73,32 @@
 === RUN   degust/Programs/testFails/unstated
 --- FAIL: degust/Programs/testFails/unstated
     tests/failing/unstated.jello: no expectation: give expect, stderr, golden, status, trap or error
+=== RUN   degust/Programs/testFails/warning-error
+--- FAIL: degust/Programs/testFails/warning-error
+    tests/failing/warning-error.jello: error says the fixture does not compile, so it cannot also warn
+=== RUN   degust/Programs/testFails/warning-missing
+=== RUN   degust/Programs/testFails/warning-missing/jit
+--- FAIL: degust/Programs/testFails/warning-missing
+    the warnings: got nothing, want tests/failing/warning-missing.jello:3:5: warning: this clause cannot fail: use `let`
+=== RUN   degust/Programs/testFails/warning-unplaced
+--- FAIL: degust/Programs/testFails/warning-unplaced
+    tests/failing/warning-unplaced.jello: warning takes a place, as in 3:5: message
+=== RUN   degust/Programs/testFails/warning-unstated
+=== RUN   degust/Programs/testFails/warning-unstated/jit
+--- FAIL: degust/Programs/testFails/warning-unstated
+    the compiler warned, which no warning directive states:
+        tests/failing/warning-unstated.jello:2:32: warning: this clause cannot fail: use `let`
+        let f = fn(v: I32): I32 { with x <- v { x + 1 } };
+                                       ^
+=== RUN   degust/Programs/testFails/warning-wrong
+=== RUN   degust/Programs/testFails/warning-wrong/jit
+--- FAIL: degust/Programs/testFails/warning-wrong
+    the warnings:
+        got:
+        tests/failing/warning-wrong.jello:3:32: warning: this clause cannot fail: use `let`
+        let f = fn(v: I32): I32 { with x <- v { x + 1 } };
+                                       ^
+        want:
+        tests/failing/warning-wrong.jello:3:5: warning: this clause cannot fail: use `let`
 --- FAIL: degust/Programs/testFails (tests/degust/Programs.test.jello:11)
 FAIL

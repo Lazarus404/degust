@@ -92,5 +92,17 @@
 === RUN   degust/Programs/testPasses/trap/no-jit
 --- PASS: degust/Programs/testPasses/trap/no-jit
 --- PASS: degust/Programs/testPasses/trap
+=== RUN   degust/Programs/testPasses/warning-echo
+=== RUN   degust/Programs/testPasses/warning-echo/jit
+--- PASS: degust/Programs/testPasses/warning-echo/jit
+=== RUN   degust/Programs/testPasses/warning-echo/no-jit
+--- PASS: degust/Programs/testPasses/warning-echo/no-jit
+--- PASS: degust/Programs/testPasses/warning-echo
+=== RUN   degust/Programs/testPasses/warning
+=== RUN   degust/Programs/testPasses/warning/jit
+--- PASS: degust/Programs/testPasses/warning/jit
+=== RUN   degust/Programs/testPasses/warning/no-jit
+--- PASS: degust/Programs/testPasses/warning/no-jit
+--- PASS: degust/Programs/testPasses/warning
 --- PASS: degust/Programs/testPasses (tests/degust/Programs.test.jello:8)
 ok

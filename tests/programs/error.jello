@@ -1,2 +1,2 @@
-// error: 2:1: unknown local: missing
+// error: 2:1: unknown name: missing
 missing

@@ -25,7 +25,7 @@ package degust;
  *   // trap: BOUNDS 2:1      it traps so, and exits 1, every mode alike; the
  *                            place, optional, is a line and column of the
  *                            fixture, or `function 0 at pc 3` in a `.jlo.txt`
- *   // error: 3:5: unknown local: x
+ *   // error: 3:5: unknown name: x
  *                            it does not compile (or assemble): the compiler
  *                            exits 1, writes nothing, and its standard error
  *                            starts with this diagnostic, at a line and
@@ -33,6 +33,12 @@ package degust;
  *                            directory fixture (`// error: dep/Bad.jello:3:1:
  *                            ...`); one line per directive, so a caret can
  *                            follow
+ *   // warning: 3:5: this clause cannot fail
+ *                            it compiles with this warning, placed as an
+ *                            error is and given without its `warning: `;
+ *                            one directive per warning, in the order the
+ *                            compiler gives them, and a compile with a
+ *                            warning no directive states fails
  *   // args: one "two words" its arguments
  *   // flags: --path $DIR/lib
  *                            the compiler's further flags, after the source
@@ -45,9 +51,9 @@ package degust;
  *                            still fail somewhere, and is reported as skipped;
  *                            once it passes, it fails, to be promoted
  *
- * Only expect, stderr and error repeat; any other directive given twice is
- * malformed. In every value, $DIR is the fixture's directory, as the runner
- * names it.
+ * Only expect, stderr, error and warning repeat; any other directive given
+ * twice is malformed. In every value, $DIR is the fixture's directory, as
+ * the runner names it.
  *
  * The options, after the test binary's --, say what runs the fixtures (the
  * usage lists them):
@@ -102,9 +108,9 @@ let _jobs = 0;
 let _out = "";
 
 const _MODES = ["jit", "no-jit", "eager"];
-const _KEYS = ["expect", "stderr", "golden", "status", "trap", "error", "args", "flags", "modes", "gc", "finalizes", "pending"];
+const _KEYS = ["expect", "stderr", "golden", "status", "trap", "error", "warning", "args", "flags", "modes", "gc", "finalizes", "pending"];
 // The directives that take a line each; the others are given once.
-const _REPEATED = ["expect", "stderr", "error"];
+const _REPEATED = ["expect", "stderr", "error", "warning"];
 
 let _contains = fn(items: Array<Bytes>, item: Bytes): Bool {
   let i = 0;
@@ -281,6 +287,9 @@ let _malformed = fn(directives: Array<Tuple<Bytes, Bytes>>, bytecode: Bool): Byt
   if (has("error") && (has("expect") || has("stderr") || has("golden") || has("status") || has("trap") || has("args") || has("gc"))) {
     return "error says the fixture does not compile, so it cannot also say how it runs";
   }
+  if (has("error") && has("warning")) { return "error says the fixture does not compile, so it cannot also warn"; }
+  let warnings = _values(directives, "warning"); let w = 0;
+  while (w < warnings.len()) { if (!_isPlaced(warnings[w])) { return "warning takes a place, as in 3:5: message"; } w++; }
   if (has("trap") && (has("status") || has("stderr"))) { return "trap gives the exit status and the standard error"; }
   if (has("expect") && has("golden")) { return "expect and golden both give the standard output"; }
   if (has("status") && (_number(_value(directives, "status", "")) < 0)) { return "status takes a number"; }
@@ -329,6 +338,41 @@ let _mismatch = fn(what: Bytes, got: Bytes, want: Bytes): Bytes {
   multiline ? what + ":\ngot:\n" + shownGot + "\nwant:\n" + shownWant : what + ": got " + shownGot + ", want " + shownWant
 };
 
+/* DIAGNOSTIC, a place and a message, as the compiler gives it for SOURCE:
+ * a place in the fixture starts with its line, one in another module with
+ * its path, under SOURCE's directory. */
+let _placed = fn(source: Bytes, diagnostic: Bytes): Bytes {
+  let dir = dirname(source); let first = Bytes.get_u8(diagnostic, 0);
+  dir + "/" + ((first >= 48) && (first <= 57) ? _from(source, Bytes.len(dir) + 1) + ":" : "") + diagnostic
+};
+
+/* Whether the first line of TEXT starts with a place and a message:
+ * `L:C: ` or `PATH:L:C: `. */
+let _isPlaced = fn(text: Bytes): Bool {
+  let end = indexOf(text, "\n"); let line = end < 0 ? text : Bytes.slice(text, 0, end);
+  let at = indexOf(line, ": "); let parts = split(at < 0 ? "" : Bytes.slice(line, 0, at), ":"); let n = parts.len();
+  (n >= 2) && (_number(parts[n - 1]) >= 0) && (_number(parts[n - 2]) >= 0)
+};
+
+/* Whether the first line of TEXT is a diagnostic of a compile of SOURCE: a
+ * place under SOURCE's directory, which an echoed source line never starts
+ * with, and a message. */
+let _isDiagnostic = fn(source: Bytes, text: Bytes): Bool { startsWith(text, dirname(source) + "/") && _isPlaced(text) };
+
+/* The diagnostics a compile of SOURCE gave in ERR, its standard error, less
+ * the source line and caret after each. */
+let _diagnostics = fn(source: Bytes, err: Bytes): Array<Bytes> {
+  let lines = split(_chomp(err), "\n"); let found = Array.new<Bytes>(0); let i = 0;
+  while (i < lines.len()) { if (_isDiagnostic(source, lines[i])) { found.push(lines[i]); } i++; }
+  found
+};
+
+// The line the compiler gives for WARNING, a directive's value, in SOURCE.
+let _warned = fn(source: Bytes, warning: Bytes): Bytes {
+  let at = indexOf(warning, ": ");
+  _placed(source, Bytes.slice(warning, 0, at) + ": warning: " + _from(warning, at + 2))
+};
+
 // What is wrong with a compile of SOURCE, expecting DIRECTIVES, to MODULE.
 let _compileProblems = fn(
   directives: Array<Tuple<Bytes, Bytes>>,
@@ -338,12 +382,20 @@ let _compileProblems = fn(
 ): Array<Bytes> {
   let (status, out, err) = result; let problems = Array.new<Bytes>(0);
   let error = _lines(directives, "error");
+  let warnings = _values(directives, "warning");
   if (error == "") {
-    if ((status != 0) || (err != "")) { problems.push("the compile failed (status " + Std.string(status) + "):\n" + _chomp(err)); }
+    if (status != 0) {
+      problems.push("the compile failed (status " + Std.string(status) + "):\n" + _chomp(err));
+    } else if (warnings.len() == 0) {
+      if (err != "") { problems.push("the compiler warned, which no warning directive states:\n" + _chomp(err)); }
+    } else {
+      let want = _warned(source, warnings[0]); let i = 1;
+      while (i < warnings.len()) { want = want + "\n" + _warned(source, warnings[i]); i++; }
+      // Its standard error must also start with one, so that nothing else comes first.
+      if (!_isDiagnostic(source, err) || (join(_diagnostics(source, err), "\n") != want)) { problems.push(_mismatch("the warnings", _chomp(err), want)); }
+    }
   } else {
-    // A place in the fixture starts with its line; one in another module, with its path.
-    let dir = dirname(source); let first = Bytes.get_u8(error, 0);
-    let want = dir + "/" + ((first >= 48) && (first <= 57) ? _from(source, Bytes.len(dir) + 1) + ":" : "") + error;
+    let want = _placed(source, error);
     if (status != 1) { problems.push(_mismatch("the compiler's exit status", Std.string(status), "1")); }
     if (_chomp(out) != "") { problems.push(_mismatch("the compiler's standard output", _chomp(out), "")); }
     if (!startsWith(err, want)) { problems.push(_mismatch("the diagnostic", _chomp(err), want)); }
