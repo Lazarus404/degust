@@ -25,8 +25,9 @@ package degust;
  *   // trap: BOUNDS 2:1      it traps so, and exits 1, every mode alike; the
  *                            place, optional, is a line and column of the
  *                            fixture, the end of another file's path and a
- *                            place in it, or `function 0 at pc 3` in a
- *                            `.jlo.txt`
+ *                            place in it, the end of another file's path
+ *                            alone (any line in it, as for a library's), or
+ *                            `function 0 at pc 3` in a `.jlo.txt`
  *   // called: 7:1           with trap, the calls that led to it, innermost
  *                            first, one line per directive, as the VM's
  *                            `called from` lines give them: a line and
@@ -92,6 +93,7 @@ import type { Test } from std.testing;
 import std.testing as T;
 import degust.Golden as G;
 import { exists, listDir, makeDirs, readText, remove, writeText } from std.io.File;
+import type { Command } from std.io.Command;
 import { start, result, waitAny, cpuCount } from std.io.Command;
 import { endsWith, indexOf, join, split, startsWith } from std.core.Bytes;
 import { dirname } from std.io.Path;
@@ -156,10 +158,18 @@ let _isLineColumn = fn(place: Bytes): Bool {
 let _endsAt = fn(path: Bytes, place: Bytes): Bool { (path == place) || endsWith(path, "/" + place) };
 
 /* Whether GOT, a place the VM printed, is PLACE: a line and column is in
- * SOURCE, the fixture, and another place ends the path. */
+ * SOURCE, the fixture; another place ends the path; and a path alone, with no
+ * line and column, names the file whatever the line, so that a place inside a
+ * library a fixture does not own does not pin its lines. */
 let _placeIs = fn(got: Bytes, place: Bytes, source: Bytes): Bool {
   let bare = endsWith(place, _AGAIN) ? _dropEnd(place, Bytes.len(_AGAIN)) : place;
-  _isLineColumn(bare) ? got == source + ":" + place : _endsAt(got, place)
+  if (_isLineColumn(bare)) { return got == source + ":" + place; }
+  if (indexOf(bare, ":") >= 0) { return _endsAt(got, place); }
+  let again = endsWith(got, _AGAIN);
+  let at = again ? _dropEnd(got, Bytes.len(_AGAIN)) : got;
+  let parts = split(at, ":"); let n = parts.len();
+  if ((again != (place != bare)) || (n < 3) || !_isLineColumn(parts[n - 2] + ":" + parts[n - 1])) { return false; }
+  _endsAt(_dropEnd(at, Bytes.len(parts[n - 2]) + Bytes.len(parts[n - 1]) + 2), bare)
 };
 
 // The decimal I32 TEXT, or -1.
@@ -354,7 +364,7 @@ let _runQueue = fn(
   queue: Array<Tuple<Array<Bytes>, Array<Bytes>>>,
   done: (I32, Tuple<I32, Bytes, Bytes>) -> Null
 ): Null {
-  let running = Array.new<Dynamic>(0); let indexes = Array.new<I32>(0); let next = 0;
+  let running = Array.new<Command>(0); let indexes = Array.new<I32>(0); let next = 0;
   while ((next < queue.len()) || (running.len() > 0)) {
     while ((next < queue.len()) && (running.len() < _jobs)) {
       let (argv, env) = queue[next];
@@ -461,7 +471,7 @@ let _runProblems = fn(
     let space = indexOf(trap, " ");
     let kind = space < 0 ? trap : Bytes.slice(trap, 0, space);
     let at = space < 0 ? "" : _from(trap, space + 1);
-    let message = "jellovm: trap " + kind + " in ";
+    let message = "jello: trap " + kind + " in ";
     /* A program the compiler built names its source and place; a hand-written
      * module, which has no line table, names the function and pc. */
     let bytecode = _isBytecode(source);

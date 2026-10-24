@@ -1,0 +1,9 @@
+// trap: BOUNDS dep/Deep.jello
+// called: dep/Deep.jello
+// called: 8:29
+// called: 9:1
+// A place in a module may name its file alone, at whatever line it is.
+import { twice } from dep.Deep;
+
+let run = fn(i: I32): I32 { twice(i) + twice(i) };
+run(5)

@@ -1,0 +1,5 @@
+// trap: BOUNDS dep/Other.jello
+// A trap placed in a file it is not in.
+import { twice } from dep.Deep;
+
+twice(5)

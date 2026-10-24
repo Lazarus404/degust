@@ -11,18 +11,21 @@ _For golden files, see Max Grigorev at ZuriHac, 2010_
 
 ## Use
 
-Depend on degust in `jello.json` and fetch it:
+Name degust in your project's `jello.json`. It is for your own tests, so it
+goes in `dev_dependencies`, which the projects that use yours never fetch:
 
 ```json
 {
   "name": "app",
   "version": "0.1.0",
-  "dependencies": { "degust": "0.1.0" }
+  "dev_dependencies": {
+    "degust": {"github": "Lazarus404/degust", "tag": "0.1.0"}
+  }
 }
 ```
 
 ```sh
-jlo_tool get-deps          # degust lands in packages/degust
+jelloc deps.get          # degust lands in packages/degust
 ```
 
 Write a test that runs your fixtures:
@@ -34,13 +37,12 @@ import { run } from degust.Programs;
 let testPrograms = fn(t: Test) { run(t, "tests/programs"); null };
 ```
 
-Build the test binary with degust's sources as a root, then run it. After
-`--`, name the compiler and the VM:
+`jelloc test` builds every test with the project's sources and packages as
+roots, and runs them. Arguments after the first `--` go to the test binary,
+such as `-v` or `--run NAME`; after the second, name the compiler and the VM:
 
-### MacOS:
 ```sh
-jelloc --test tests/Programs.test.jello --path tests --path packages/degust/src --out build/tests.jlo
-jellovm build/tests.jlo -- --compiler jelloc --vm "$(command -v jellovm)"
+jelloc test -- -- --compiler jelloc --vm "$(command -v jello)"
 ```
 
 Tests in the same binary that run the compiler or the VM themselves, such as
@@ -79,7 +81,7 @@ The full set of directives is documented at the top of
 Jello toolchain:
 
 - `JELLOC`: the compiler, as words (default `jelloc`);
-- `JELLOVM`: the VM (default `jellovm` on `PATH`), with `jlo_tool` and
+- `JELLO`: the VM (default `jello` on `PATH`), with `jlo_tool` and
   `std.jdll` beside it;
 - `JELLO_STD_PATH`: the standard library, where the compiler looks for it.
 

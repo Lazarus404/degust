@@ -25,6 +25,12 @@
 === RUN   degust/Programs/testPasses/called-again/no-jit
 --- PASS: degust/Programs/testPasses/called-again/no-jit
 --- PASS: degust/Programs/testPasses/called-again
+=== RUN   degust/Programs/testPasses/called-file
+=== RUN   degust/Programs/testPasses/called-file/jit
+--- PASS: degust/Programs/testPasses/called-file/jit
+=== RUN   degust/Programs/testPasses/called-file/no-jit
+--- PASS: degust/Programs/testPasses/called-file/no-jit
+--- PASS: degust/Programs/testPasses/called-file
 === RUN   degust/Programs/testPasses/called-module
 === RUN   degust/Programs/testPasses/called-module/jit
 --- PASS: degust/Programs/testPasses/called-module/jit

@@ -8,7 +8,12 @@
 === RUN   degust/Programs/testFails/bytecode
 === RUN   degust/Programs/testFails/bytecode/jit
 --- FAIL: degust/Programs/testFails/bytecode/jit
-    the trap: got status 1, jellovm: trap TYPE_MISMATCH in function 0 at pc 3, want jellovm: trap TYPE_MISMATCH in function 0 at pc 9
+    the trap:
+        got:
+        status 1, jello: trap TYPE_MISMATCH in function 0 at pc 3
+        jello: native args_get failed: index out of range
+        want:
+        jello: trap TYPE_MISMATCH in function 0 at pc 9
 --- FAIL: degust/Programs/testFails/bytecode
 === RUN   degust/Programs/testFails/called
 === RUN   degust/Programs/testFails/called/jit
@@ -72,7 +77,7 @@
 === RUN   degust/Programs/testFails/trap
 === RUN   degust/Programs/testFails/trap/jit
 --- FAIL: degust/Programs/testFails/trap/jit
-    the trap: got status 0, want tests/failing/trap.jello:LINE:COLUMN: jellovm: trap BOUNDS in ...
+    the trap: got status 0, want tests/failing/trap.jello:LINE:COLUMN: jello: trap BOUNDS in ...
     the standard output: got 1, want nothing
 --- FAIL: degust/Programs/testFails/trap
 === RUN   degust/Programs/testFails/twice
@@ -108,5 +113,16 @@
                                        ^
         want:
         tests/failing/warning-wrong.jello:3:5: warning: this clause cannot fail: use `let`
+=== RUN   degust/Programs/testFails/wrong-file
+=== RUN   degust/Programs/testFails/wrong-file/jit
+--- FAIL: degust/Programs/testFails/wrong-file/jit
+    the trap:
+        got:
+        status 1, tests/failing/wrong-file/dep/Deep.jello:4:63: jello: trap BOUNDS in function 0 at pc 4
+          called from tests/failing/wrong-file/dep/Deep.jello:5:38
+          called from tests/failing/wrong-file/main.jello:5:1
+        want:
+        .../dep/Other.jello: jello: trap BOUNDS in ...
+--- FAIL: degust/Programs/testFails/wrong-file
 --- FAIL: degust/Programs/testFails (tests/degust/Programs.test.jello:11)
 FAIL
