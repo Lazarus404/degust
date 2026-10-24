@@ -2,7 +2,7 @@
 === RUN   degust/Programs/testFails/broken
 --- FAIL: degust/Programs/testFails/broken
     the compile failed (status 1):
-        tests/failing/broken.jello:2:1: unknown name: missing
+        tests/failing/broken.jello:2:1: unknown name: missing [E0300]
         missing
         ^
 === RUN   degust/Programs/testFails/bytecode
@@ -10,6 +10,11 @@
 --- FAIL: degust/Programs/testFails/bytecode/jit
     the trap: got status 1, jellovm: trap TYPE_MISMATCH in function 0 at pc 3, want jellovm: trap TYPE_MISMATCH in function 0 at pc 9
 --- FAIL: degust/Programs/testFails/bytecode
+=== RUN   degust/Programs/testFails/called
+=== RUN   degust/Programs/testFails/called/jit
+--- FAIL: degust/Programs/testFails/called/jit
+    the calls: got tests/failing/called.jello:5:1, want 9:9
+--- FAIL: degust/Programs/testFails/called
 === RUN   degust/Programs/testFails/compiles
 --- FAIL: degust/Programs/testFails/compiles
     the compiler's exit status: got 0, want 1
@@ -46,6 +51,9 @@
 --- FAIL: degust/Programs/testFails/handles/gc
     the collector finalized 0 native handles, fewer than 1000
 --- FAIL: degust/Programs/testFails/handles
+=== RUN   degust/Programs/testFails/modes-word
+--- FAIL: degust/Programs/testFails/modes-word
+    tests/failing/modes-word.jello: modes takes jit, no-jit or eager, separated by spaces, not jit,no-jit
 === RUN   degust/Programs/testFails/output
 === RUN   degust/Programs/testFails/output/jit
 --- FAIL: degust/Programs/testFails/output/jit

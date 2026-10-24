@@ -1,0 +1,8 @@
+// trap: BOUNDS 6:56
+// called: 7:31
+// called: 8:1
+// Each function calls, so that the compiler inlines none.
+let items = [1, 2];
+let pick = fn(i: I32): I32 { i > 9 ? pick(i - 1) * 2 : items[i] };
+let twice = fn(i: I32): I32 { pick(i) * 3 };
+twice(5)

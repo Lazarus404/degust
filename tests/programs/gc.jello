@@ -2,5 +2,5 @@
 // expect: 1000
 let kept = [1000];
 let round = 0;
-while (round < 50000) { let dropped = [round, round]; round++; }
+while (round < 200000) { let dropped = [round, round]; round++; }
 kept[0]

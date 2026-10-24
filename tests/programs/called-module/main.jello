@@ -1,0 +1,9 @@
+// trap: BOUNDS dep/Deep.jello:4:63
+// called: dep/Deep.jello:5:38
+// called: 8:29
+// called: 9:1
+// A trap in a module names its place and calls there by their paths.
+import { twice } from dep.Deep;
+
+let run = fn(i: I32): I32 { twice(i) + twice(i) };
+run(5)

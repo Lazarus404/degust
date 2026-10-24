@@ -24,7 +24,16 @@ package degust;
  *   // status: 3             its exit status (otherwise 0)
  *   // trap: BOUNDS 2:1      it traps so, and exits 1, every mode alike; the
  *                            place, optional, is a line and column of the
- *                            fixture, or `function 0 at pc 3` in a `.jlo.txt`
+ *                            fixture, the end of another file's path and a
+ *                            place in it, or `function 0 at pc 3` in a
+ *                            `.jlo.txt`
+ *   // called: 7:1           with trap, the calls that led to it, innermost
+ *                            first, one line per directive, as the VM's
+ *                            `called from` lines give them: a line and
+ *                            column of the fixture, `function 0 at pc 3` in
+ *                            a `.jlo.txt`, or a place elsewhere as the end
+ *                            of its path, as in `io/File.jello:4:2`; a run
+ *                            of one call is one line ending `, repeatedly`
  *   // error: 3:5: unknown name: x
  *                            it does not compile (or assemble): the compiler
  *                            exits 1, writes nothing, and its standard error
@@ -42,7 +51,8 @@ package degust;
  *   // args: one "two words" its arguments
  *   // flags: --path $DIR/lib
  *                            the compiler's further flags, after the source
- *   // modes: no-jit         only these of the modes run
+ *   // modes: no-jit         only these of the modes run: jit, no-jit or
+ *                            eager, separated by spaces
  *   // gc: collects          a further run must collect garbage, and
  *                            return the expected output
  *   // finalizes: 100        with gc, the collector must also free at
@@ -82,7 +92,7 @@ import type { Test } from std.testing;
 import std.testing as T;
 import degust.Golden as G;
 import { exists, listDir, makeDirs, readText, remove, writeText } from std.io.File;
-import { start, result, waitAny, cpuCount } from std.io.Process;
+import { start, result, waitAny, cpuCount } from std.io.Command;
 import { endsWith, indexOf, join, split, startsWith } from std.core.Bytes;
 import { dirname } from std.io.Path;
 
@@ -108,9 +118,9 @@ let _jobs = 0;
 let _out = "";
 
 const _MODES = ["jit", "no-jit", "eager"];
-const _KEYS = ["expect", "stderr", "golden", "status", "trap", "error", "warning", "args", "flags", "modes", "gc", "finalizes", "pending"];
+const _KEYS = ["expect", "stderr", "golden", "status", "trap", "called", "error", "warning", "args", "flags", "modes", "gc", "finalizes", "pending"];
 // The directives that take a line each; the others are given once.
-const _REPEATED = ["expect", "stderr", "error", "warning"];
+const _REPEATED = ["expect", "stderr", "called", "error", "warning"];
 
 let _contains = fn(items: Array<Bytes>, item: Bytes): Bool {
   let i = 0;
@@ -127,6 +137,29 @@ let _chomp = fn(text: Bytes): Bytes {
   let n = Bytes.len(text);
   while ((n > 0) && (Bytes.get_u8(text, n - 1) == 10)) { n--; }
   Bytes.slice(text, 0, n)
+};
+
+// How the VM's lines after a trap start, and how one for a run of a call ends.
+const _CALLED = "  called from ";
+const _AGAIN = ", repeatedly";
+
+// TEXT up to its first newline.
+let _firstLine = fn(text: Bytes): Bytes { let end = indexOf(text, "\n"); end < 0 ? text : Bytes.slice(text, 0, end) };
+
+// Whether PLACE is a line and column, as in 3:5.
+let _isLineColumn = fn(place: Bytes): Bool {
+  let parts = split(place, ":");
+  (parts.len() == 2) && (_number(parts[0]) >= 0) && (_number(parts[1]) >= 0)
+};
+
+// Whether PATH is PLACE, or ends with it after a slash.
+let _endsAt = fn(path: Bytes, place: Bytes): Bool { (path == place) || endsWith(path, "/" + place) };
+
+/* Whether GOT, a place the VM printed, is PLACE: a line and column is in
+ * SOURCE, the fixture, and another place ends the path. */
+let _placeIs = fn(got: Bytes, place: Bytes, source: Bytes): Bool {
+  let bare = endsWith(place, _AGAIN) ? _dropEnd(place, Bytes.len(_AGAIN)) : place;
+  _isLineColumn(bare) ? got == source + ":" + place : _endsAt(got, place)
 };
 
 // The decimal I32 TEXT, or -1.
@@ -291,11 +324,17 @@ let _malformed = fn(directives: Array<Tuple<Bytes, Bytes>>, bytecode: Bool): Byt
   let warnings = _values(directives, "warning"); let w = 0;
   while (w < warnings.len()) { if (!_isPlaced(warnings[w])) { return "warning takes a place, as in 3:5: message"; } w++; }
   if (has("trap") && (has("status") || has("stderr"))) { return "trap gives the exit status and the standard error"; }
+  if (has("called") && !has("trap")) { return "called gives the calls that led to a trap, so it needs trap"; }
   if (has("expect") && has("golden")) { return "expect and golden both give the standard output"; }
   if (has("status") && (_number(_value(directives, "status", "")) < 0)) { return "status takes a number"; }
   if (has("gc") && (_value(directives, "gc", "") != "collects")) { return "gc takes collects"; }
   if (has("finalizes") && (!has("gc") || (_number(_value(directives, "finalizes", "")) < 0))) { return "finalizes takes a number, with gc: collects"; }
   if (has("flags") && bytecode) { return "flags are the compiler's, and jlo_tool assembles a .jlo.txt"; }
+  let modes = _words(_value(directives, "modes", "")); let m = 0;
+  while (m < modes.len()) {
+    if (!_contains(_MODES, modes[m])) { return "modes takes jit, no-jit or eager, separated by spaces, not " + modes[m]; }
+    m++;
+  }
   ""
 };
 
@@ -349,7 +388,7 @@ let _placed = fn(source: Bytes, diagnostic: Bytes): Bytes {
 /* Whether the first line of TEXT starts with a place and a message:
  * `L:C: ` or `PATH:L:C: `. */
 let _isPlaced = fn(text: Bytes): Bool {
-  let end = indexOf(text, "\n"); let line = end < 0 ? text : Bytes.slice(text, 0, end);
+  let line = _firstLine(text);
   let at = indexOf(line, ": "); let parts = split(at < 0 ? "" : Bytes.slice(line, 0, at), ":"); let n = parts.len();
   (n >= 2) && (_number(parts[n - 1]) >= 0) && (_number(parts[n - 2]) >= 0)
 };
@@ -426,12 +465,21 @@ let _runProblems = fn(
     /* A program the compiler built names its source and place; a hand-written
      * module, which has no line table, names the function and pc. */
     let bytecode = _isBytecode(source);
+    let head = _firstLine(err); let ends = indexOf(head, ": " + message);
     let located = bytecode ? startsWith(err, message + at)
-      : at == "" ? startsWith(err, source + ":") && (indexOf(err, ": " + message) >= 0)
-      : startsWith(err, source + ":" + at + ": " + message);
-    let wanted = bytecode ? message + (at == "" ? "..." : at) : source + ":" + (at == "" ? "LINE:COLUMN" : at) + ": " + message + "...";
+      : (ends >= 0) && (at == "" ? startsWith(head, source + ":") : _placeIs(Bytes.slice(head, 0, ends), at, source));
+    let wanted = bytecode ? message + (at == "" ? "..." : at)
+      : (_isLineColumn(at) || (at == "") ? source + ":" + (at == "" ? "LINE:COLUMN" : at) : ".../" + at) + ": " + message + "...";
     if ((status != 1) || !located) { problems.push(_mismatch("the trap", "status " + Std.string(status) + (err == "" ? "" : ", " + _chomp(err)), wanted)); }
     if ((first != "") && (err != first)) { problems.push(_mismatch("the trap, against the first mode's", _chomp(err), _chomp(first))); }
+    let called = _values(directives, "called");
+    if (called.len() > 0) {
+      let got = Array.new<Bytes>(0); let lines = split(err, "\n"); let l = 0;
+      while (l < lines.len()) { if (startsWith(lines[l], _CALLED)) { got.push(_from(lines[l], Bytes.len(_CALLED))); } l++; }
+      let same = got.len() == called.len(); let c = 0;
+      while (same && (c < called.len())) { same = bytecode ? got[c] == called[c] : _placeIs(got[c], called[c], source); c++; }
+      if (!same) { problems.push(_mismatch("the calls", join(got, "\n"), join(called, "\n"))); }
+    }
   }
   if ((_values(directives, "golden").len() == 0) && (_chomp(out) != _lines(directives, "expect"))) {
     problems.push(_mismatch("the standard output", _chomp(out), _lines(directives, "expect")));
@@ -441,9 +489,8 @@ let _runProblems = fn(
 
 // The line of TEXT after its first PREFIX, or "" when it has none.
 let _after = fn(text: Bytes, prefix: Bytes): Bytes {
-  let at = indexOf(text, prefix); let rest = at < 0 ? "" : _from(text, at + Bytes.len(prefix));
-  let end = indexOf(rest, "\n");
-  end < 0 ? rest : Bytes.slice(rest, 0, end)
+  let at = indexOf(text, prefix);
+  _firstLine(at < 0 ? "" : _from(text, at + Bytes.len(prefix)))
 };
 
 /* What is wrong with a gc run: it must collect at least once, finalize at

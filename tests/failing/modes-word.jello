@@ -1,0 +1,3 @@
+// modes: jit,no-jit
+// expect: 1
+1

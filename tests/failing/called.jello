@@ -1,0 +1,5 @@
+// trap: BOUNDS
+// called: 9:9
+let items = [1, 2];
+let pick = fn(i: I32): I32 { i > 9 ? pick(i - 1) * 2 : items[i] };
+pick(5)

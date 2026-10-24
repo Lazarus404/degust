@@ -1,0 +1,5 @@
+package dep;
+
+let items = [1, 2];
+export let pick = fn(i: I32): I32 { i > 9 ? pick(i - 1) * 2 : items[i] };
+export let twice = fn(i: I32): I32 { pick(i) * 3 };

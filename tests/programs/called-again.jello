@@ -1,0 +1,8 @@
+// trap: STACK_OVERFLOW 6:7
+// called: 6:7, repeatedly
+// called: 8:1
+// Recursion too deep to hold gives its one call once, then the call that began it.
+let deep = fn(n: I32): I32 {
+  1 + deep(n + 1)
+};
+deep(0)

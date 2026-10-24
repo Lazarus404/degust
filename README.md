@@ -70,8 +70,8 @@ fixtures share. A fixture states what it expects in comment lines at its top:
 
 The full set of directives is documented at the top of
 [src/degust/Programs.jello](src/degust/Programs.jello): `expect`, `stderr`,
-`golden`, `status`, `trap`, `error`, `warning`, `args`, `flags`, `modes`, `gc`,
-`finalizes` and `pending`. The runner's options are documented there too.
+`golden`, `status`, `trap`, `called`, `error`, `warning`, `args`, `flags`, `modes`,
+`gc`, `finalizes` and `pending`. The runner's options are documented there too.
 
 ## Development
 
